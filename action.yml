@@ -448,6 +448,12 @@ runs:
       run: |
         if [ -d "$HOME/.factory" ]; then
           cp -r "$HOME/.factory" "${{ runner.temp }}/.factory"
+          # The copy is uploaded as an artifact: strip files that carry GitHub tokens
+          # (mcp.json env, session transcripts, anything else matching a token pattern).
+          # `|| true` because grep exits 1 when nothing matches, which fails under pipefail.
+          rm -f "${{ runner.temp }}/.factory/mcp.json"
+          rm -rf "${{ runner.temp }}/.factory/sessions"
+          grep -rlE 'gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|ghs_[A-Za-z0-9]{20,}' "${{ runner.temp }}/.factory" | xargs -r rm -f || true
         fi
 
     - name: Upload debug artifacts
@@ -461,3 +467,12 @@ runs:
         include-hidden-files: true
         if-no-files-found: ignore
         retention-days: 7
+
+    # $HOME/.factory survives between jobs on persistent self-hosted runners;
+    # remove the token-bearing files so they do not stay on disk.
+    - name: Remove credentials from runner home
+      if: always()
+      shell: bash
+      run: |
+        rm -f "$HOME/.factory/mcp.json"
+        rm -rf "$HOME/.factory/sessions"
