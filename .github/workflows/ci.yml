@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -24,7 +24,7 @@ jobs:
       - run: bun test
 
   typecheck:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -33,8 +33,41 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
 
+  # Tier 1 only: warnings are allowed here, errors fail. The full warning list
+  # (the Tier-2 debt) is in this job's log; Tier 2 is gated by the lint-ratchet
+  # job below. Gates template: engineering/standards/templates/ci-gates/.
+  lint:
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.11
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+
+  lint-ratchet:
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The ratchet diffs against the merge base, so it needs real history.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.11
+      - run: bun install --frozen-lockfile
+      - id: base
+        uses: ./.github/actions/merge-base
+        with:
+          base-gate-scripts: "true"
+      - name: Tier-2 ratchet
+        env:
+          RATCHET_BASE: ${{ steps.base.outputs.ref }}
+        run: bun run lint:ratchet
+
   format:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
