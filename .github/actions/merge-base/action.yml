@@ -1,0 +1,64 @@
+name: merge-base
+description: >
+  Resolve what a ratcheted gate compares against: `ref` (origin/<base branch> on a
+  pull request, the previous tip on a push) and `sha` (the merge base of that ref
+  and HEAD). Needs actions/checkout with fetch-depth 0. With base-gate-scripts, it
+  also restores scripts/ci/ from the merge base in this checkout, so a script edit
+  never grades its own PR; the PR's versions take effect on the next PR. This does
+  not cover the workflow files themselves (pull_request runs the PR's ci.yml):
+  those, package.json and the gate configs rely on CODEOWNERS review. The PR's
+  script versions are still unit-tested in the `test` job.
+inputs:
+  base-gate-scripts:
+    description: Restore scripts/ci/ from the merge base when the PR changes it
+    required: false
+    default: "false"
+outputs:
+  ref:
+    description: Base ref for RATCHET_BASE
+    value: ${{ steps.base.outputs.ref }}
+  sha:
+    description: Merge-base commit
+    value: ${{ steps.base.outputs.sha }}
+runs:
+  using: composite
+  steps:
+    - id: base
+      shell: bash
+      # Event data reaches the script through env, never through `${{ }}` inside
+      # `run:`, so a crafted branch name cannot inject shell.
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_REF: ${{ github.base_ref }}
+        BEFORE_SHA: ${{ github.event.before }}
+      run: |
+        set -euo pipefail
+        if [ "$EVENT_NAME" = "pull_request" ]; then
+          git fetch --no-tags --quiet origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          ref="origin/$BASE_REF"
+        else
+          ref="$BEFORE_SHA"
+          if [ -z "$ref" ] \
+            || [ "$ref" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "${ref}^{commit}" 2>/dev/null; then
+            # Branch creation or a force-push that dropped the old tip.
+            ref="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          fi
+        fi
+        sha="$(git merge-base "$ref" HEAD 2>/dev/null || git rev-parse --verify "${ref}^{commit}")"
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+        echo "sha=$sha" >> "$GITHUB_OUTPUT"
+        echo "merge-base: $ref ($sha)"
+    - if: inputs.base-gate-scripts == 'true'
+      shell: bash
+      env:
+        MERGE_BASE: ${{ steps.base.outputs.sha }}
+      run: |
+        set -euo pipefail
+        # The base has no gate scripts yet (the adoption PR): use the PR's.
+        if ! git cat-file -e "$MERGE_BASE:scripts/ci" 2>/dev/null; then exit 0; fi
+        if ! git diff --quiet "$MERGE_BASE" -- scripts/ci; then
+          echo "merge-base: scripts/ci changed in this change; running the merge-base versions."
+          rm -rf scripts/ci
+          git checkout "$MERGE_BASE" -- scripts/ci
+        fi
